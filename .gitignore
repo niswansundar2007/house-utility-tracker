@@ -1,0 +1,4 @@
+# Build output and your personal data (phone number, API key, history)
+dist/
+data/
+*.tmp

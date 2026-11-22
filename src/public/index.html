@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>House Utility Tracker</title>
+<!-- FRONTEND: talks to the backend REST API at /api/* (served by HouseUtility.exe) -->
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1d2330; --muted: #667085; --line: #e4e7ec;
+    --accent: #2563eb; --accent-text: #ffffff; --ok: #16a34a; --warn: #d97706; --bad: #dc2626;
+    --gas: #ea580c; --elec: #ca8a04; --track: #eef0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --text: #e6e9ef; --muted: #98a2b3; --line: #2b3240;
+      --accent: #4f8cff; --accent-text: #0b1020; --ok: #22c55e; --warn: #f59e0b; --bad: #f87171;
+      --gas: #fb923c; --elec: #facc15; --track: #262c38;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  header { padding: 20px 16px 8px; max-width: 1100px; margin: 0 auto; }
+  header h1 { margin: 0; font-size: 22px; }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 40px; display: grid; gap: 16px;
+         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .card h2 { margin: 0 0 12px; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+  .wide { grid-column: 1 / -1; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .big { font-size: 28px; font-weight: 650; margin: 2px 0; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .bar { height: 8px; background: var(--track); border-radius: 99px; overflow: hidden; margin: 10px 0 6px; }
+  .bar > div { height: 100%; border-radius: 99px; transition: width .4s; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+  .pill.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .pill.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  .pill.bad { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+  form { display: grid; gap: 10px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  label { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+  [hidden] { display: none !important; }
+  input, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+          border-radius: 8px; padding: 8px 10px; width: 100%; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 9px 14px; cursor: pointer;
+           background: var(--accent); color: var(--accent-text); }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button.link { background: none; color: var(--accent); padding: 2px 6px; font-weight: 500; }
+  button.danger { background: none; color: var(--bad); padding: 2px 6px; font-weight: 500; }
+  button:disabled { opacity: .6; cursor: wait; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  .scroll { overflow-x: auto; }
+  details { margin-top: 4px; }
+  summary { cursor: pointer; color: var(--accent); font-size: 14px; }
+  ol { padding-left: 20px; margin: 8px 0; }
+  code { background: var(--track); padding: 1px 5px; border-radius: 4px; }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px);
+           background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 8px; display: none; z-index: 9; }
+  @media (max-width: 420px) { .row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏠 House Utility Tracker</h1>
+  <p>Tracks your gas cylinder and electricity bill, and sends WhatsApp reminders.</p>
+</header>
+
+<main>
+  <!-- Gas status -->
+  <section class="card">
+    <h2><span class="dot" style="background:var(--gas)"></span>Gas cylinder</h2>
+    <div id="gasStatus" class="muted">No cylinder recorded yet.</div>
+  </section>
+
+  <!-- Electricity status -->
+  <section class="card">
+    <h2><span class="dot" style="background:var(--elec)"></span>Electricity bill</h2>
+    <div id="elecStatus" class="muted">No bill recorded yet.</div>
+  </section>
+
+  <!-- Record gas -->
+  <section class="card">
+    <h2>Record new gas cylinder</h2>
+    <form id="gasForm">
+      <label>Date received <input type="date" name="date" required></label>
+      <label>Note (optional) <input type="text" name="note" placeholder="e.g. Indane, booking #123"></label>
+      <button type="submit">Save gas entry</button>
+    </form>
+  </section>
+
+  <!-- Record electricity -->
+  <section class="card">
+    <h2>Record electricity bill</h2>
+    <form id="elecForm">
+      <div class="row">
+        <label>Bill date <input type="date" name="date" required></label>
+        <label>Amount (₹) <input type="number" name="amount" min="0" step="0.01" placeholder="0"></label>
+      </div>
+      <button type="submit">Save bill</button>
+    </form>
+  </section>
+
+  <!-- Settings -->
+  <section class="card wide">
+    <h2>Settings &amp; WhatsApp</h2>
+    <form id="settingsForm">
+      <div class="row">
+        <label>Send WhatsApp using
+          <select name="Provider">
+            <option value="greenapi">Green-API (free Developer plan)</option>
+            <option value="callmebot">CallMeBot (free)</option>
+          </select>
+        </label>
+        <label>WhatsApp number to notify (with country code) <input name="Phone" placeholder="+919876543210" required></label>
+      </div>
+      <div class="row" data-provider="callmebot">
+        <label>CallMeBot API key <input name="ApiKey" placeholder="e.g. 123456"></label>
+      </div>
+      <div class="row" data-provider="greenapi">
+        <label>Green-API apiUrl <input name="GreenApiUrl" placeholder="https://7103.api.greenapi.com"></label>
+        <label>Green-API idInstance <input name="GreenIdInstance" placeholder="e.g. 7103123456"></label>
+      </div>
+      <div class="row" data-provider="greenapi">
+        <label>Green-API apiTokenInstance <input name="GreenApiToken" type="password" placeholder="long token from the console" autocomplete="off"></label>
+      </div>
+      <div class="row">
+        <label>Members in the house <input type="number" name="Members" min="1" required></label>
+        <label>Cylinder size (kg) <input type="number" name="CylinderKg" min="1" step="0.1" required></label>
+      </div>
+      <div class="row">
+        <label>Gas used per person per day (kg) <input type="number" name="KgPerPersonPerDay" min="0.01" step="0.01" required></label>
+        <label>Gas reminder: days before running out <input type="number" name="GasReminderDays" min="0" required></label>
+      </div>
+      <div class="row">
+        <label>Electricity billing cycle (days) <input type="number" name="ElecCycleDays" min="1" required></label>
+        <label>Bill reminder: days before cycle ends <input type="number" name="ElecReminderDays" min="0" required></label>
+      </div>
+      <div class="actions">
+        <button type="submit">Save settings</button>
+        <button type="button" class="secondary" id="testBtn">📲 Send test WhatsApp</button>
+        <button type="button" class="secondary" id="checkBtn">Check reminders now</button>
+      </div>
+    </form>
+    <details data-provider="greenapi">
+      <summary>How to set up Green-API (one-time, about 5 minutes)</summary>
+      <ol>
+        <li>Go to <a href="https://console.green-api.com" target="_blank" rel="noopener">console.green-api.com</a> and register with your email, then enter the code sent to your inbox.</li>
+        <li>Click <b>Create an instance</b> and choose the free <b>Developer</b> plan. Wait about 2 minutes.</li>
+        <li>Open the instance and click to show the <b>QR code</b>. On your phone, open WhatsApp &rarr; <b>Linked devices</b> &rarr; <b>Link a device</b> and scan it.</li>
+        <li>On the instance page, copy <b>apiUrl</b>, <b>idInstance</b> and <b>apiTokenInstance</b> into the boxes above.</li>
+        <li>Enter the number that should <i>receive</i> reminders, click <b>Save settings</b>, then <b>Send test WhatsApp</b>.</li>
+      </ol>
+      <p class="muted">Messages are sent <i>from</i> the WhatsApp you linked. If you send to that same number, they appear in your own "Message yourself" chat, usually with no notification sound. To get a proper alert, link a second WhatsApp number (for example a spare SIM or WhatsApp Business) and send to your main number. The free plan can message up to 3 chats.</p>
+    </details>
+    <details data-provider="callmebot">
+      <summary>How to get your free CallMeBot API key (one-time, 1 minute)</summary>
+      <ol>
+        <li>Open the CallMeBot WhatsApp page:
+          <a href="https://www.callmebot.com/blog/free-api-whatsapp-messages/" target="_blank" rel="noopener">callmebot.com/blog/free-api-whatsapp-messages</a>
+          and add the phone number it shows to your phone contacts.</li>
+        <li>From WhatsApp, send this message to that contact: <code>I allow callmebot to send me messages</code></li>
+        <li>You will get a reply with your <b>API key</b>. Paste it above with your number (e.g. <code>+919876543210</code>) and click <b>Save settings</b>.</li>
+        <li>Press <b>Send test WhatsApp</b>. You should get a message within a few seconds.</li>
+      </ol>
+      <p class="muted">Reminders are checked every 30 minutes while the app window is open, and each one is sent once per cylinder or bill.</p>
+    </details>
+  </section>
+
+  <!-- History -->
+  <section class="card">
+    <h2>Gas history</h2>
+    <div class="scroll"><table><thead><tr><th>Received</th><th>Note</th><th></th></tr></thead><tbody id="gasRows"></tbody></table></div>
+  </section>
+  <section class="card">
+    <h2>Electricity history</h2>
+    <div class="scroll"><table><thead><tr><th>Bill date</th><th>Amount</th><th>Paid</th><th></th></tr></thead><tbody id="elecRows"></tbody></table></div>
+  </section>
+
+  <!-- Notification log -->
+  <section class="card wide">
+    <h2>WhatsApp notification log</h2>
+    <div class="scroll"><table><thead><tr><th>Time</th><th>Type</th><th>Status</th><th>Details</th></tr></thead><tbody id="logRows"></tbody></table></div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const nice = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
+
+function toast(msg, ms = 3500) {
+  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = 'none', ms);
+}
+
+async function api(path, body) {
+  const res = await fetch('/api/' + path, body === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+function pill(daysLeft, remindDays) {
+  if (daysLeft < 0) return `<span class="pill bad">Overdue by ${-daysLeft} day(s)</span>`;
+  if (daysLeft <= remindDays) return `<span class="pill warn">${daysLeft} day(s) left</span>`;
+  return `<span class="pill ok">${daysLeft} days left</span>`;
+}
+
+function bar(used, total, color) {
+  const pct = Math.max(0, Math.min(100, total ? (used / total) * 100 : 0));
+  return `<div class="bar"><div style="width:${pct}%;background:${color}"></div></div>`;
+}
+
+function render(d) {
+  const s = d.settings, g = d.gasStatus, e = d.elecStatus;
+
+  // Gas card
+  if (g.lastDate) {
+    $('#gasStatus').innerHTML = `
+      <div class="muted">Expected to run out on</div>
+      <div class="big">${nice(g.expectedEnd)}</div>
+      ${pill(g.daysLeft, s.GasReminderDays)}
+      ${bar(g.daysUsed, g.daysPerCylinder, 'var(--gas)')}
+      <div class="muted">Received ${nice(g.lastDate)} · lasts about <b>${g.daysPerCylinder} days</b> for ${s.Members} member(s)
+      (${s.CylinderKg} kg ÷ ${s.Members} × ${s.KgPerPersonPerDay} kg/day)<br>
+      WhatsApp reminder on ${nice(g.reminderOn)}${g.actualAvgDays ? ` · your real average: ${g.actualAvgDays} days` : ''}</div>`;
+  } else {
+    $('#gasStatus').innerHTML = `<span class="muted">No cylinder recorded yet. At current settings one cylinder lasts about <b>${g.daysPerCylinder} days</b>.</span>`;
+  }
+
+  // Electricity card
+  if (e.lastDate) {
+    $('#elecStatus').innerHTML = `
+      <div class="muted">Pay before the cycle ends on</div>
+      <div class="big">${nice(e.dueDate)}</div>
+      ${e.paid ? '<span class="pill ok">Paid</span>' : pill(e.daysLeft, s.ElecReminderDays)}
+      ${bar(e.cycleDays - e.daysLeft, e.cycleDays, 'var(--elec)')}
+      <div class="muted">Last bill ${nice(e.lastDate)}${e.amount ? ` · ₹${e.amount}` : ''} · ${e.cycleDays}-day cycle<br>
+      WhatsApp reminder on ${nice(e.reminderOn)}</div>`;
+  } else {
+    $('#elecStatus').innerHTML = '<span class="muted">No bill recorded yet.</span>';
+  }
+
+  // Settings form (fill only if not being edited)
+  const f = $('#settingsForm');
+  if (!f.contains(document.activeElement)) {
+    for (const k of Object.keys(s)) if (f.elements[k]) f.elements[k].value = s[k] ?? '';
+    showProvider();
+  }
+
+  // History tables
+  $('#gasRows').innerHTML = d.gas.length ? d.gas.map(x => `
+    <tr><td>${nice(x.Date)}</td><td>${esc(x.Note)}</td>
+    <td><button class="danger" onclick="del('gas','${x.Id}')">Delete</button></td></tr>`).join('')
+    : '<tr><td colspan="3" class="muted">Nothing yet</td></tr>';
+
+  $('#elecRows').innerHTML = d.electricity.length ? d.electricity.map(x => `
+    <tr><td>${nice(x.Date)}</td><td>${x.Amount ? '₹' + x.Amount : '-'}</td>
+    <td><button class="link" onclick="togglePaid('${x.Id}')">${x.Paid ? '✅ Yes' : 'Mark paid'}</button></td>
+    <td><button class="danger" onclick="del('electricity','${x.Id}')">Delete</button></td></tr>`).join('')
+    : '<tr><td colspan="4" class="muted">Nothing yet</td></tr>';
+
+  $('#logRows').innerHTML = d.log.length ? d.log.map(x => `
+    <tr><td>${esc(x.Time)}</td><td>${esc(x.Type)}</td>
+    <td>${x.Ok ? '<span class="pill ok">Sent</span>' : '<span class="pill bad">Failed</span>'}</td>
+    <td class="muted">${esc(x.Response)}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="muted">No messages sent yet</td></tr>';
+}
+
+async function load() { try { render(await api('data')); } catch (err) { toast('Cannot reach backend: ' + err.message); } }
+
+async function withBusy(btn, fn) {
+  btn.disabled = true;
+  try { await fn(); } catch (err) { toast('Error: ' + err.message, 6000); }
+  finally { btn.disabled = false; }
+}
+
+$('#gasForm').addEventListener('submit', (ev) => {
+  ev.preventDefault(); const f = ev.target;
+  withBusy(f.querySelector('button'), async () => {
+    render(await api('gas', { Date: f.date.value, Note: f.note.value }));
+    f.reset(); f.date.valueAsDate = new Date(); toast('Gas entry saved');
+  });
+});
+
+$('#elecForm').addEventListener('submit', (ev) => {
+  ev.preventDefault(); const f = ev.target;
+  withBusy(f.querySelector('button'), async () => {
+    render(await api('electricity', { Date: f.date.value, Amount: Number(f.amount.value || 0) }));
+    f.reset(); f.date.valueAsDate = new Date(); toast('Electricity bill saved');
+  });
+});
+
+$('#settingsForm').addEventListener('submit', (ev) => {
+  ev.preventDefault(); const f = ev.target;
+  const nums = ['Members','CylinderKg','KgPerPersonPerDay','GasReminderDays','ElecCycleDays','ElecReminderDays'];
+  const body = { Phone: f.Phone.value, ApiKey: f.ApiKey.value, Provider: f.Provider.value,
+                 GreenApiUrl: f.GreenApiUrl.value, GreenIdInstance: f.GreenIdInstance.value, GreenApiToken: f.GreenApiToken.value };
+  nums.forEach(k => body[k] = Number(f.elements[k].value));
+  withBusy(f.querySelector('button[type=submit]'), async () => {
+    document.activeElement.blur(); render(await api('settings', body)); toast('Settings saved');
+  });
+});
+
+$('#testBtn').addEventListener('click', (ev) => withBusy(ev.target, async () => {
+  toast('Sending test message…');
+  const r = await api('test-whatsapp', {});
+  render(r.status);
+  toast(r.result.Ok ? '✅ Test message sent. Check your WhatsApp.' : '❌ ' + r.result.Response, 7000);
+}));
+
+$('#checkBtn').addEventListener('click', (ev) => withBusy(ev.target, async () => {
+  const r = await api('check-now', {});
+  render(r.status);
+  toast(r.sent.length ? `Sent ${r.sent.filter(x => x.Ok).length} of ${r.sent.length} reminder(s)` : 'No reminders due right now');
+}));
+
+async function del(type, id) {
+  if (!confirm('Delete this entry?')) return;
+  try { render(await api(type + '/delete', { id })); } catch (err) { toast(err.message); }
+}
+async function togglePaid(id) {
+  try { render(await api('electricity/paid', { id })); } catch (err) { toast(err.message); }
+}
+
+function showProvider() {
+  const p = $('#settingsForm').Provider.value;
+  document.querySelectorAll('[data-provider]').forEach(el => el.hidden = el.dataset.provider !== p);
+}
+$('#settingsForm').Provider.addEventListener('change', showProvider);
+
+document.querySelectorAll('input[type=date]').forEach(i => i.valueAsDate = new Date());
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
