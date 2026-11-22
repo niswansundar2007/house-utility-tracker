@@ -23,6 +23,22 @@ Requires Windows 10 or 11. The .NET Framework 4.x it needs is already part of Wi
 
 Download the source (**Code → Download ZIP**), extract it, double-click `build.bat`, then run `dist\HouseUtility.exe`. The build uses the C# compiler that comes with Windows.
 
+## Host it online for free (Render)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/niswansundar2007/house-utility-tracker)
+
+1. Click the button above and sign in to Render with GitHub. The free plan needs no card.
+2. Enter an **APP_PASSWORD**. The site asks for it in a login prompt; any username works.
+3. Click **Apply** or **Deploy**. After a few minutes your app is live at `https://<name>.onrender.com`.
+
+Things to know about Render's free plan:
+- **The app sleeps after 15 minutes without visits** and takes about a minute to wake up. Reminders are only checked while it's awake. To keep it awake, create a free monitor at [UptimeRobot](https://uptimerobot.com) or [cron-job.org](https://cron-job.org) that opens `https://<name>.onrender.com/healthz` every 10 minutes.
+- **The disk is wiped on every restart.** To keep your data, store it in a secret GitHub Gist:
+  1. Create a **secret** gist at https://gist.github.com with a file named `db.json` containing `{}`. The last part of its URL is the **GIST_ID**.
+  2. Create a classic token at https://github.com/settings/tokens with only the **gist** permission. This is the **GITHUB_TOKEN**.
+  3. Add both values in Render → your service → **Environment**.
+- `TZ` is set to `Asia/Kolkata` so reminder dates match Indian time. Change it if you live elsewhere.
+
 ## WhatsApp setup
 
 ### Option A: Green-API (recommended)

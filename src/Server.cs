@@ -94,6 +94,10 @@ public static class Program
     static string BaseDir, PublicDir, DataFile;
     static Database Db;
     static Timer Scheduler;
+    static string AppPassword;                 // env APP_PASSWORD: protects the site with a login prompt
+    static readonly string GistId = Environment.GetEnvironmentVariable("GIST_ID");
+    static readonly string GistToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+    static bool UseGist { get { return !string.IsNullOrEmpty(GistId) && !string.IsNullOrEmpty(GistToken); } }
 
     public static void Main(string[] args)
     {
@@ -112,9 +116,18 @@ public static class Program
         DataFile = Path.Combine(dataDir, "db.json");
         LoadDb();
 
+        // Cloud hosts (Render, etc.) pass the port in the PORT variable and need all interfaces
+        string envPort = Environment.GetEnvironmentVariable("PORT");
+        bool cloud = !string.IsNullOrEmpty(envPort);
+        int ep;
+        if (cloud && int.TryParse(envPort, out ep)) Port = ep;
+        AppPassword = Environment.GetEnvironmentVariable("APP_PASSWORD");
+        if (cloud && string.IsNullOrEmpty(AppPassword))
+            Console.WriteLine("WARNING: APP_PASSWORD is not set - anyone with the URL can see and change your data.");
+
         var listener = new HttpListener();
         string url = "http://localhost:" + Port + "/";
-        listener.Prefixes.Add(url);
+        listener.Prefixes.Add(cloud ? "http://*:" + Port + "/" : url);
         try { listener.Start(); }
         catch (Exception ex)
         {
@@ -135,7 +148,7 @@ public static class Program
         // Check reminders 10s after start and then every 30 minutes
         Scheduler = new Timer(delegate { SafeCheck(); }, null, 10000, 30 * 60 * 1000);
 
-        if (!args.Contains("--no-browser"))
+        if (!cloud && !args.Contains("--no-browser"))
         {
             try { Process.Start(url); } catch { }
         }
@@ -148,10 +161,56 @@ public static class Program
     }
 
     // --------------------------- Persistence ---------------------------
+    // Optional cloud storage: keeps db.json in a private GitHub Gist so data survives
+    // restarts on free hosts whose disk is wiped (set GIST_ID and GITHUB_TOKEN).
+    static WebClient GistClient()
+    {
+        var wc = new WebClient();
+        wc.Encoding = Encoding.UTF8;
+        wc.Headers[HttpRequestHeader.UserAgent] = "house-utility-tracker";
+        wc.Headers[HttpRequestHeader.Authorization] = "Bearer " + GistToken;
+        wc.Headers[HttpRequestHeader.Accept] = "application/vnd.github+json";
+        return wc;
+    }
+
+    static string GistRead()
+    {
+        using (var wc = GistClient())
+        {
+            var gist = Json.Deserialize<Dictionary<string, object>>(wc.DownloadString("https://api.github.com/gists/" + GistId));
+            var files = gist["files"] as Dictionary<string, object>;
+            if (files == null || !files.ContainsKey("db.json")) return null;
+            var f = (Dictionary<string, object>)files["db.json"];
+            string content = Convert.ToString(f["content"]);
+            return string.IsNullOrWhiteSpace(content) || content.Trim() == "{}" ? null : content;
+        }
+    }
+
+    static void GistWrite(string json)
+    {
+        var payload = new Dictionary<string, object> {
+            { "files", new Dictionary<string, object> { { "db.json", new Dictionary<string, object> { { "content", json } } } } } };
+        using (var wc = GistClient())
+        {
+            wc.Headers[HttpRequestHeader.ContentType] = "application/json";
+            wc.UploadString("https://api.github.com/gists/" + GistId, "PATCH", Json.Serialize(payload));
+        }
+    }
+
     static void LoadDb()
     {
         lock (Lock)
         {
+            if (UseGist)
+            {
+                try
+                {
+                    string remote = GistRead();
+                    if (remote != null) File.WriteAllText(DataFile, remote, Encoding.UTF8);
+                    Console.WriteLine("Loaded data from GitHub Gist " + GistId);
+                }
+                catch (Exception ex) { Console.WriteLine("Could not read GitHub Gist: " + ex.Message); }
+            }
             if (File.Exists(DataFile))
             {
                 try { Db = Json.Deserialize<Database>(File.ReadAllText(DataFile, Encoding.UTF8)); }
@@ -174,11 +233,32 @@ public static class Program
     {
         lock (Lock)
         {
+            string json = Json.Serialize(Db);
             string tmp = DataFile + ".tmp";
-            File.WriteAllText(tmp, Json.Serialize(Db), Encoding.UTF8);
+            File.WriteAllText(tmp, json, Encoding.UTF8);
             if (File.Exists(DataFile)) File.Delete(DataFile);
             File.Move(tmp, DataFile);
+            if (UseGist)
+            {
+                try { GistWrite(json); }
+                catch (Exception ex) { Console.WriteLine("Could not save to GitHub Gist: " + ex.Message); }
+            }
         }
+    }
+
+    // Login prompt (HTTP Basic auth) when APP_PASSWORD is set. Any username works.
+    static bool Authorized(HttpListenerRequest req)
+    {
+        if (string.IsNullOrEmpty(AppPassword)) return true;
+        string h = req.Headers["Authorization"];
+        if (h == null || !h.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase)) return false;
+        try
+        {
+            string decoded = Encoding.UTF8.GetString(Convert.FromBase64String(h.Substring(6).Trim()));
+            int i = decoded.IndexOf(':');
+            return i >= 0 && decoded.Substring(i + 1) == AppPassword;
+        }
+        catch { return false; }
     }
 
     // ----------------------------- Helpers -----------------------------
@@ -429,6 +509,20 @@ public static class Program
             string path = req.Url.AbsolutePath.TrimEnd('/');
             if (path == "") path = "/";
             string method = req.HttpMethod.ToUpperInvariant();
+
+            // Health check for the host / uptime pinger (no login needed, reveals nothing)
+            if (path == "/healthz")
+            {
+                WriteJson(res, 200, new Dictionary<string, object> { { "ok", true } });
+                return;
+            }
+            if (!Authorized(req))
+            {
+                res.AddHeader("WWW-Authenticate", "Basic realm=\"House Utility Tracker\", charset=\"UTF-8\"");
+                WriteJson(res, 401, new Dictionary<string, object> { { "error", "Password required" } });
+                return;
+            }
+
             string body = "";
             if (req.HasEntityBody)
                 using (var r = new StreamReader(req.InputStream, Encoding.UTF8)) body = r.ReadToEnd();
@@ -575,7 +669,7 @@ public static class Program
     static void ServeStatic(HttpListenerResponse res, string path)
     {
         if (path == "/") path = "/index.html";
-        string full = Path.GetFullPath(Path.Combine(PublicDir, path.TrimStart('/').Replace('/', '\\')));
+        string full = Path.GetFullPath(Path.Combine(PublicDir, path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
         if (!full.StartsWith(PublicDir, StringComparison.OrdinalIgnoreCase) || !File.Exists(full))
         {
             byte[] nf = Encoding.UTF8.GetBytes("Not found");

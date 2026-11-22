@@ -1,0 +1,16 @@
+# Render "Blueprint": lets anyone deploy this app on Render's free plan in one click
+services:
+  - type: web
+    name: house-utility-tracker
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_PASSWORD      # password for the login prompt (you choose it)
+        sync: false
+      - key: GIST_ID           # optional: id of a secret GitHub Gist that stores your data
+        sync: false
+      - key: GITHUB_TOKEN      # optional: GitHub token with only the "gist" permission
+        sync: false
+      - key: TZ                # your time zone, so reminder dates are correct
+        value: Asia/Kolkata
